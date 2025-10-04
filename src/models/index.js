@@ -1,39 +1,88 @@
 const { sequelize } = require('../config/database');
-const Admin = require('./Admin');
-const Manager = require('./Manager');
-const Employee = require('./Employee');
-const ApprovalRequest = require('./ApprovalRequest');
+
+// Import all models
+const Company = require('./Company');
+const User = require('./User');
+const ExpenseCategory = require('./ExpenseCategory');
+const ApprovalWorkflow = require('./ApprovalWorkflow');
+const ApprovalWorkflowStep = require('./ApprovalWorkflowStep');
 const ApprovalRule = require('./ApprovalRule');
+const Expense = require('./Expense');
+const ApprovalStep = require('./ApprovalStep');
+const ApprovalHistory = require('./ApprovalHistory');
+const Notification = require('./Notification');
 
 // Define associations
-Admin.hasMany(Manager, { foreignKey: 'admin_id', as: 'managers' });
-Manager.belongsTo(Admin, { foreignKey: 'admin_id', as: 'admin' });
 
-Admin.hasMany(Employee, { foreignKey: 'admin_id', as: 'employees' });
-Employee.belongsTo(Admin, { foreignKey: 'admin_id', as: 'admin' });
+// Company associations
+Company.hasMany(User, { foreignKey: 'company_id', as: 'users' });
+Company.hasMany(ExpenseCategory, { foreignKey: 'company_id', as: 'expense_categories' });
+Company.hasMany(ApprovalWorkflow, { foreignKey: 'company_id', as: 'approval_workflows' });
+Company.hasMany(ApprovalRule, { foreignKey: 'company_id', as: 'approval_rules' });
+Company.hasMany(Expense, { foreignKey: 'company_id', as: 'expenses' });
 
-Manager.hasMany(Employee, { foreignKey: 'manager_id', as: 'employees' });
-Employee.belongsTo(Manager, { foreignKey: 'manager_id', as: 'manager' });
+// User associations
+User.belongsTo(Company, { foreignKey: 'company_id', as: 'company' });
+User.belongsTo(User, { foreignKey: 'manager_id', as: 'manager' });
+User.hasMany(User, { foreignKey: 'manager_id', as: 'direct_reports' });
+User.hasMany(Expense, { foreignKey: 'user_id', as: 'expenses' });
+User.hasMany(ApprovalStep, { foreignKey: 'approver_id', as: 'approval_steps' });
+User.hasMany(ApprovalHistory, { foreignKey: 'user_id', as: 'approval_history' });
+User.hasMany(Notification, { foreignKey: 'user_id', as: 'notifications' });
 
-Employee.hasMany(ApprovalRequest, { foreignKey: 'employee_id', as: 'approval_requests' });
-ApprovalRequest.belongsTo(Employee, { foreignKey: 'employee_id', as: 'employee' });
+// ExpenseCategory associations
+ExpenseCategory.belongsTo(Company, { foreignKey: 'company_id', as: 'company' });
+ExpenseCategory.hasMany(Expense, { foreignKey: 'category_id', as: 'expenses' });
 
-Employee.hasMany(ApprovalRule, { foreignKey: 'employee_id', as: 'approval_rules' });
-ApprovalRule.belongsTo(Employee, { foreignKey: 'employee_id', as: 'employee' });
+// ApprovalWorkflow associations
+ApprovalWorkflow.belongsTo(Company, { foreignKey: 'company_id', as: 'company' });
+ApprovalWorkflow.hasMany(ApprovalWorkflowStep, { foreignKey: 'workflow_id', as: 'steps' });
+ApprovalWorkflow.hasMany(ApprovalRule, { foreignKey: 'workflow_id', as: 'rules' });
+ApprovalWorkflow.hasMany(Expense, { foreignKey: 'workflow_id', as: 'expenses' });
 
-// Chief relationship (self-referencing Employee)
-Employee.belongsTo(Employee, { foreignKey: 'chief_id', as: 'chief' });
-Employee.hasMany(Employee, { foreignKey: 'chief_id', as: 'subordinates' });
+// ApprovalWorkflowStep associations
+ApprovalWorkflowStep.belongsTo(ApprovalWorkflow, { foreignKey: 'workflow_id', as: 'workflow' });
+ApprovalWorkflowStep.belongsTo(User, { foreignKey: 'approver_id', as: 'approver' });
+ApprovalWorkflowStep.hasMany(ApprovalStep, { foreignKey: 'workflow_step_id', as: 'approval_steps' });
 
-// Approver relationships
-ApprovalRequest.belongsTo(Manager, { foreignKey: 'current_approver_id', as: 'current_approver' });
-ApprovalRequest.belongsTo(Manager, { foreignKey: 'final_approver_id', as: 'final_approver' });
+// ApprovalRule associations
+ApprovalRule.belongsTo(Company, { foreignKey: 'company_id', as: 'company' });
+ApprovalRule.belongsTo(ApprovalWorkflow, { foreignKey: 'workflow_id', as: 'workflow' });
+ApprovalRule.belongsTo(User, { foreignKey: 'specific_approver_id', as: 'specific_approver' });
 
+// Expense associations
+Expense.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+Expense.belongsTo(Company, { foreignKey: 'company_id', as: 'company' });
+Expense.belongsTo(ApprovalWorkflow, { foreignKey: 'workflow_id', as: 'workflow' });
+Expense.belongsTo(ExpenseCategory, { foreignKey: 'category_id', as: 'category' });
+Expense.hasMany(ApprovalStep, { foreignKey: 'expense_id', as: 'approval_steps' });
+Expense.hasMany(ApprovalHistory, { foreignKey: 'expense_id', as: 'approval_history' });
+Expense.hasMany(Notification, { foreignKey: 'expense_id', as: 'notifications' });
+
+// ApprovalStep associations
+ApprovalStep.belongsTo(Expense, { foreignKey: 'expense_id', as: 'expense' });
+ApprovalStep.belongsTo(ApprovalWorkflowStep, { foreignKey: 'workflow_step_id', as: 'workflow_step' });
+ApprovalStep.belongsTo(User, { foreignKey: 'approver_id', as: 'approver' });
+
+// ApprovalHistory associations
+ApprovalHistory.belongsTo(Expense, { foreignKey: 'expense_id', as: 'expense' });
+ApprovalHistory.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+
+// Notification associations
+Notification.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+Notification.belongsTo(Expense, { foreignKey: 'expense_id', as: 'expense' });
+
+// Export all models
 module.exports = {
   sequelize,
-  Admin,
-  Manager,
-  Employee,
-  ApprovalRequest,
-  ApprovalRule
+  Company,
+  User,
+  ExpenseCategory,
+  ApprovalWorkflow,
+  ApprovalWorkflowStep,
+  ApprovalRule,
+  Expense,
+  ApprovalStep,
+  ApprovalHistory,
+  Notification
 };

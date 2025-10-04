@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const { Admin, Manager, Employee } = require('../models');
+const { User, Company } = require('../models');
 
 // Generate JWT token
 const generateToken = (user, role) => {
@@ -8,7 +8,7 @@ const generateToken = (user, role) => {
       id: user.id,
       email: user.email,
       role: role,
-      company_id: user.admin_id || user.id // For admin, use id; for others, use admin_id
+      company_id: user.company_id
     },
     process.env.JWT_SECRET,
     { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
@@ -27,29 +27,13 @@ const authenticateToken = async (req, res, next) => {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     
-    // Fetch user based on role
-    let user;
-    switch (decoded.role) {
-      case 'admin':
-        user = await Admin.findByPk(decoded.id);
-        break;
-      case 'manager':
-        user = await Manager.findByPk(decoded.id, {
-          include: [{ model: Admin, as: 'admin' }]
-        });
-        break;
-      case 'employee':
-        user = await Employee.findByPk(decoded.id, {
-          include: [
-            { model: Admin, as: 'admin' },
-            { model: Manager, as: 'manager' },
-            { model: Employee, as: 'chief' }
-          ]
-        });
-        break;
-      default:
-        return res.status(401).json({ error: 'Invalid user role' });
-    }
+    // Fetch user with company and manager info
+    const user = await User.findByPk(decoded.id, {
+      include: [
+        { model: Company, as: 'company' },
+        { model: User, as: 'manager', attributes: ['id', 'name', 'email'] }
+      ]
+    });
 
     if (!user || !user.is_active) {
       return res.status(401).json({ error: 'User not found or inactive' });
@@ -57,7 +41,7 @@ const authenticateToken = async (req, res, next) => {
 
     req.user = user;
     req.userRole = decoded.role;
-    req.companyId = decoded.company_id;
+    req.companyId = user.company_id;
     
     next();
   } catch (error) {
@@ -119,57 +103,43 @@ const authorizeResourceAccess = (resourceType) => {
       const resourceId = req.params.id;
       
       switch (resourceType) {
-        case 'employee':
-          // Employees can access their own data, managers can access their employees, admins can access all
-          if (req.userRole === 'employee' && req.user.id === parseInt(resourceId)) {
+        case 'user':
+          // Users can access their own data, managers can access their employees, admins can access all in company
+          if (req.user.id === parseInt(resourceId)) {
             return next();
           }
-          if (req.userRole === 'manager') {
-            const employee = await Employee.findByPk(resourceId);
-            if (employee && employee.manager_id === req.user.id) {
-              return next();
-            }
-          }
-          if (req.userRole === 'admin') {
-            const employee = await Employee.findByPk(resourceId);
-            if (employee && employee.admin_id === req.user.id) {
-              return next();
-            }
-          }
-          break;
           
-        case 'manager':
-          // Managers can access their own data, admins can access their managers
-          if (req.userRole === 'manager' && req.user.id === parseInt(resourceId)) {
+          const targetUser = await User.findByPk(resourceId);
+          if (!targetUser || targetUser.company_id !== req.user.company_id) {
+            return res.status(404).json({ error: 'User not found' });
+          }
+          
+          if (req.userRole === 'manager' && targetUser.manager_id === req.user.id) {
             return next();
           }
           if (req.userRole === 'admin') {
-            const manager = await Manager.findByPk(resourceId);
-            if (manager && manager.admin_id === req.user.id) {
-              return next();
-            }
+            return next();
           }
           break;
           
-        case 'approval_request':
-          // Employees can access their own requests, managers can access requests they need to approve
-          const request = await require('../models/ApprovalRequest').findByPk(resourceId, {
-            include: [{ model: Employee, as: 'employee' }]
+        case 'expense':
+          // Employees can access their own expenses, managers can access their team's expenses, admins can access all
+          const { Expense } = require('../models');
+          const expense = await Expense.findByPk(resourceId, {
+            include: [{ model: User, as: 'user' }]
           });
           
-          if (!request) {
-            return res.status(404).json({ error: 'Request not found' });
+          if (!expense) {
+            return res.status(404).json({ error: 'Expense not found' });
           }
           
-          if (req.userRole === 'employee' && request.employee_id === req.user.id) {
+          if (req.userRole === 'employee' && expense.user_id === req.user.id) {
             return next();
           }
-          if (req.userRole === 'manager' && 
-              (request.current_approver_id === req.user.id || 
-               request.final_approver_id === req.user.id)) {
+          if (req.userRole === 'manager' && expense.user.manager_id === req.user.id) {
             return next();
           }
-          if (req.userRole === 'admin' && request.employee.admin_id === req.user.id) {
+          if (req.userRole === 'admin' && expense.company_id === req.user.company_id) {
             return next();
           }
           break;

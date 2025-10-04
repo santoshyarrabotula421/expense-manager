@@ -7,102 +7,167 @@ const ApprovalRule = sequelize.define('ApprovalRule', {
     primaryKey: true,
     autoIncrement: true
   },
-  employee_id: {
+  company_id: {
     type: DataTypes.INTEGER,
     allowNull: false,
     references: {
-      model: 'employees',
+      model: 'companies',
       key: 'id'
     }
   },
-  approver_sequence: {
+  workflow_id: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    references: {
+      model: 'approval_workflows',
+      key: 'id'
+    },
+    comment: 'NULL means global rule'
+  },
+  name: {
+    type: DataTypes.STRING(255),
+    allowNull: false,
+    validate: {
+      notEmpty: true
+    }
+  },
+  rule_type: {
+    type: DataTypes.ENUM('percentage', 'specific_approver', 'hybrid', 'threshold', 'category'),
+    allowNull: false
+  },
+  condition_field: {
+    type: DataTypes.STRING(100),
+    allowNull: true,
+    comment: 'amount, category, department'
+  },
+  condition_operator: {
+    type: DataTypes.ENUM('>', '>=', '<', '<=', '=', 'IN', 'NOT IN'),
+    allowNull: false
+  },
+  condition_value: {
     type: DataTypes.JSON,
     allowNull: false,
-    defaultValue: [],
-    comment: 'Array of manager IDs in approval order'
+    comment: 'Value to compare against'
   },
-  threshold_percentage: {
-    type: DataTypes.DECIMAL(5, 2),
-    allowNull: false,
-    defaultValue: 100.00,
-    validate: {
-      min: 0.00,
-      max: 100.00
-    },
-    comment: 'Percentage threshold for automatic approval'
+  action_type: {
+    type: DataTypes.ENUM('auto_approve', 'require_approval', 'skip_step', 'add_approver'),
+    allowNull: false
   },
-  minimum_threshold_amount: {
-    type: DataTypes.DECIMAL(15, 2),
-    allowNull: false,
-    defaultValue: 0.00,
-    validate: {
-      min: 0.00
-    },
-    comment: 'Minimum amount that requires approval regardless of percentage'
-  },
-  approval_description: {
-    type: DataTypes.TEXT,
+  action_value: {
+    type: DataTypes.JSON,
     allowNull: true,
-    comment: 'Description/guidelines for approvers'
+    comment: 'Additional parameters for the action'
   },
-  requires_chief_approval: {
-    type: DataTypes.BOOLEAN,
-    defaultValue: false,
-    comment: 'Whether chief approval is required'
-  },
-  chief_approval_threshold: {
-    type: DataTypes.DECIMAL(15, 2),
+  percentage_threshold: {
+    type: DataTypes.INTEGER,
     allowNull: true,
-    comment: 'Amount threshold above which chief approval is required'
+    validate: {
+      min: 0,
+      max: 100
+    },
+    comment: 'For percentage rules (0-100)'
+  },
+  specific_approver_id: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    references: {
+      model: 'users',
+      key: 'id'
+    },
+    comment: 'For specific approver rules'
+  },
+  priority: {
+    type: DataTypes.INTEGER,
+    defaultValue: 0,
+    comment: 'Higher priority rules execute first'
   },
   is_active: {
     type: DataTypes.BOOLEAN,
     defaultValue: true
-  },
-  effective_from: {
-    type: DataTypes.DATE,
-    allowNull: false,
-    defaultValue: DataTypes.NOW
-  },
-  effective_to: {
-    type: DataTypes.DATE,
-    allowNull: true
   }
 }, {
   tableName: 'approval_rules',
+  updatedAt: false,
   indexes: [
     {
-      fields: ['employee_id']
+      name: 'idx_rule_company',
+      fields: ['company_id']
     },
     {
-      fields: ['is_active']
+      name: 'idx_rule_workflow',
+      fields: ['workflow_id']
     },
     {
-      fields: ['effective_from', 'effective_to']
+      name: 'idx_rule_priority',
+      fields: [['priority', 'DESC']]
     }
   ]
 });
 
 // Instance methods
-ApprovalRule.prototype.isEffective = function(date = new Date()) {
-  const effectiveFrom = new Date(this.effective_from);
-  const effectiveTo = this.effective_to ? new Date(this.effective_to) : null;
+ApprovalRule.prototype.evaluateCondition = function(expense) {
+  const fieldValue = this.getFieldValue(expense, this.condition_field);
+  const conditionValue = this.condition_value;
   
-  return date >= effectiveFrom && (!effectiveTo || date <= effectiveTo);
+  switch (this.condition_operator) {
+    case '>':
+      return fieldValue > conditionValue;
+    case '>=':
+      return fieldValue >= conditionValue;
+    case '<':
+      return fieldValue < conditionValue;
+    case '<=':
+      return fieldValue <= conditionValue;
+    case '=':
+      return fieldValue === conditionValue;
+    case 'IN':
+      return Array.isArray(conditionValue) && conditionValue.includes(fieldValue);
+    case 'NOT IN':
+      return Array.isArray(conditionValue) && !conditionValue.includes(fieldValue);
+    default:
+      return false;
+  }
 };
 
-ApprovalRule.prototype.requiresApproval = function(amount) {
-  return amount >= this.minimum_threshold_amount;
+ApprovalRule.prototype.getFieldValue = function(expense, field) {
+  switch (field) {
+    case 'amount':
+      return parseFloat(expense.amount_in_company_currency || expense.amount);
+    case 'category':
+      return expense.category_id;
+    case 'department':
+      return expense.user?.department;
+    default:
+      return expense[field];
+  }
 };
 
-ApprovalRule.prototype.requiresChiefApproval = function(amount) {
-  return this.requires_chief_approval && 
-         this.chief_approval_threshold && 
-         amount >= this.chief_approval_threshold;
+ApprovalRule.prototype.executeAction = function(expense, workflowSteps) {
+  switch (this.action_type) {
+    case 'auto_approve':
+      return { action: 'auto_approve', data: this.action_value };
+    case 'require_approval':
+      return { action: 'require_approval', approver_id: this.specific_approver_id };
+    case 'skip_step':
+      return { action: 'skip_step', step_number: this.action_value?.step_number };
+    case 'add_approver':
+      return { action: 'add_approver', approver_id: this.action_value?.approver_id };
+    default:
+      return null;
+  }
 };
 
-ApprovalRule.prototype.getApprovalSequence = function() {
-  return this.approver_sequence || [];
+ApprovalRule.prototype.isApplicable = function(expense, workflow = null) {
+  // Check if rule is active
+  if (!this.is_active) return false;
+  
+  // Check if rule applies to the workflow (or is global)
+  if (this.workflow_id && workflow && this.workflow_id !== workflow.id) {
+    return false;
+  }
+  
+  // Evaluate the condition
+  return this.evaluateCondition(expense);
 };
 
 module.exports = ApprovalRule;

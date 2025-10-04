@@ -10,6 +10,7 @@ const authRoutes = require('./src/routes/auth');
 const adminRoutes = require('./src/routes/admin');
 const managerRoutes = require('./src/routes/manager');
 const employeeRoutes = require('./src/routes/employee');
+const commonRoutes = require('./src/routes/common');
 const errorHandler = require('./src/middleware/errorHandler');
 
 const app = express();
@@ -53,6 +54,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/manager', managerRoutes);
 app.use('/api/employee', employeeRoutes);
+app.use('/api/common', commonRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {

@@ -1,4 +1,4 @@
-const { Admin, Manager, Employee } = require('../models');
+const { Company, User } = require('../models');
 const { generateToken } = require('../middleware/auth');
 
 // Company registration (creates admin)
@@ -7,32 +7,30 @@ const signup = async (req, res) => {
     const { company_name, name, email, password, country, phone } = req.body;
 
     // Check if company already exists
-    const existingCompany = await Admin.findOne({ where: { company_name } });
+    const existingCompany = await Company.findOne({ where: { name: company_name } });
     if (existingCompany) {
       return res.status(409).json({ error: 'Company name already exists' });
     }
 
-    // Check if email already exists
-    const existingAdmin = await Admin.findOne({ where: { email } });
-    if (existingAdmin) {
-      return res.status(409).json({ error: 'Email already registered' });
-    }
+    // Create company first
+    const company = await Company.create({
+      name: company_name,
+      country,
+      currency: 'USD', // Default currency
+      timezone: 'UTC'
+    });
 
-    // Create admin
-    const admin = await Admin.create({
-      company_name,
+    // Create admin user
+    const admin = await User.create({
+      company_id: company.id,
       name,
       email,
-      password,
-      country,
-      phone
+      password_hash: password, // Will be hashed by the model hook
+      role: 'admin'
     });
 
     // Generate token
     const token = generateToken(admin, 'admin');
-
-    // Update last login
-    await admin.update({ last_login: new Date() });
 
     res.status(201).json({
       message: 'Company registered successfully',
@@ -41,7 +39,7 @@ const signup = async (req, res) => {
         id: admin.id,
         name: admin.name,
         email: admin.email,
-        company_name: admin.company_name,
+        company_name: company.name,
         role: 'admin'
       }
     });
@@ -57,63 +55,46 @@ const signin = async (req, res) => {
     const { email, password, role, company_name } = req.body;
 
     let user;
-    let userRole = role;
+    let company;
 
-    switch (role) {
-      case 'admin':
-        user = await Admin.findOne({ where: { email } });
-        if (!user) {
-          return res.status(401).json({ error: 'Invalid credentials' });
-        }
-        break;
+    if (role === 'admin') {
+      // For admin, find user and their company
+      user = await User.findOne({ 
+        where: { email, role: 'admin' },
+        include: [{ model: Company, as: 'company' }]
+      });
+      
+      if (!user) {
+        return res.status(401).json({ error: 'Invalid credentials' });
+      }
+      
+      company = user.company;
+    } else {
+      // For manager/employee, find company first
+      if (!company_name) {
+        return res.status(400).json({ error: 'Company name is required' });
+      }
+      
+      company = await Company.findOne({ where: { name: company_name } });
+      if (!company) {
+        return res.status(401).json({ error: 'Company not found' });
+      }
 
-      case 'manager':
-        if (!company_name) {
-          return res.status(400).json({ error: 'Company name is required for managers' });
-        }
-        
-        // Find admin by company name first
-        const adminForManager = await Admin.findOne({ where: { company_name } });
-        if (!adminForManager) {
-          return res.status(401).json({ error: 'Company not found' });
-        }
-
-        user = await Manager.findOne({ 
-          where: { email, admin_id: adminForManager.id },
-          include: [{ model: Admin, as: 'admin' }]
-        });
-        
-        if (!user) {
-          return res.status(401).json({ error: 'Invalid credentials' });
-        }
-        break;
-
-      case 'employee':
-        if (!company_name) {
-          return res.status(400).json({ error: 'Company name is required for employees' });
-        }
-        
-        // Find admin by company name first
-        const adminForEmployee = await Admin.findOne({ where: { company_name } });
-        if (!adminForEmployee) {
-          return res.status(401).json({ error: 'Company not found' });
-        }
-
-        user = await Employee.findOne({ 
-          where: { email, admin_id: adminForEmployee.id },
-          include: [
-            { model: Admin, as: 'admin' },
-            { model: Manager, as: 'manager' }
-          ]
-        });
-        
-        if (!user) {
-          return res.status(401).json({ error: 'Invalid credentials' });
-        }
-        break;
-
-      default:
-        return res.status(400).json({ error: 'Invalid role' });
+      user = await User.findOne({ 
+        where: { 
+          email, 
+          company_id: company.id,
+          role: role
+        },
+        include: [
+          { model: Company, as: 'company' },
+          { model: User, as: 'manager', attributes: ['id', 'name', 'email'] }
+        ]
+      });
+      
+      if (!user) {
+        return res.status(401).json({ error: 'Invalid credentials' });
+      }
     }
 
     // Validate password
@@ -128,36 +109,25 @@ const signin = async (req, res) => {
     }
 
     // Generate token
-    const token = generateToken(user, userRole);
-
-    // Update last login
-    await user.update({ last_login: new Date() });
+    const token = generateToken(user, role);
 
     // Prepare user response
     const userResponse = {
       id: user.id,
       name: user.name,
       email: user.email,
-      role: userRole
+      role: role,
+      company_name: company.name,
+      department: user.department
     };
 
-    // Add role-specific data
-    if (userRole === 'admin') {
-      userResponse.company_name = user.company_name;
-      userResponse.country = user.country;
-    } else {
-      userResponse.company_name = user.admin.company_name;
-      userResponse.department = user.department;
-      userResponse.position = user.position;
-      
-      if (userRole === 'employee') {
-        userResponse.employee_id = user.employee_id;
-        userResponse.manager = user.manager ? {
-          id: user.manager.id,
-          name: user.manager.name,
-          email: user.manager.email
-        } : null;
-      }
+    if (role === 'employee') {
+      userResponse.employee_id = user.employee_id;
+      userResponse.manager = user.manager ? {
+        id: user.manager.id,
+        name: user.manager.name,
+        email: user.manager.email
+      } : null;
     }
 
     res.json({
